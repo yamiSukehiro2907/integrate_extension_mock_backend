@@ -3,6 +3,7 @@ import express, { type Request, type Response } from "express";
 import pool from "./config/database";
 import { createTables } from "./config/initialize_database";
 import extensionUserRoutes from "./routes/auth.route";
+import { authMiddleware } from "./middleware/auth.middleware";
 dotenv.config();
 
 const app: express.Application = express();
@@ -15,6 +16,8 @@ app.use(express.urlencoded({ extended: false }));
 app.get("/", async (req: Request, res: Response) => {
   return res.send("API HIT");
 });
+
+app.use(authMiddleware)
 
 app.use("/auth", extensionUserRoutes);
 

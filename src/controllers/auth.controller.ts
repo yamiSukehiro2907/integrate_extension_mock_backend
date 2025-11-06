@@ -1,22 +1,23 @@
-import express, { type Request, type Response } from "express";
-import jwt from "jsonwebtoken";
+import { type Request, type Response } from "express";
 import pool from "../config/database";
+import type { User } from "../interfaces/User";
+import type { Member } from "../interfaces/Member";
+import type { Project } from "../interfaces/Project";
+import type { ProjectFiles } from "../interfaces/ProjectFiles";
 
 export const authenticateUserFromExtension = async (
   req: Request,
   res: Response
 ) => {
   try {
-    const { authToken, email } = req.body;
+    const { email } = req.body;
 
-    console.log("API HIT");
-
-    if (!authToken || !email) {
-      return res.status(400).json({ message: "All fields are required" });
+    if (!email) {
+      return res.status(400).json({ message: "Email is required" });
     }
 
     const userResult = await pool.query(
-      `SELECT * FROM users WHERE email = $1`,
+      `SELECT id, name, email, username, created_at FROM users WHERE email = $1`,
       [email]
     );
 
@@ -24,25 +25,19 @@ export const authenticateUserFromExtension = async (
       return res.status(404).json({ message: "User Not Found" });
     }
 
-    const user = userResult.rows[0];
+    const userRow = userResult.rows[0];
 
-    if (!process.env.PROJECT_SECRET) {
-      throw new Error("PROJECT_SECRET not configured");
+    const projectId = req.projectId;
+
+    if (!projectId) {
+      return res.status(400).json({ message: "Project ID not found in token" });
     }
-
-    let decoded;
-    try {
-      decoded = jwt.verify(authToken, process.env.PROJECT_SECRET) as {
-        projectId: string;
-      };
-    } catch (err) {
-      return res.status(401).json({ message: "Invalid or Expired token" });
-    }
-
-    const projectId = decoded.projectId;
 
     const projectResult = await pool.query(
-      `SELECT * FROM projects WHERE id = $1`,
+      `SELECT p.id, p.name, p.version, p.project_status, p.created_at, u.name as owner_name
+       FROM projects p
+       JOIN users u ON p.owner_id = u.id
+       WHERE p.id = $1`,
       [projectId]
     );
 
@@ -50,28 +45,73 @@ export const authenticateUserFromExtension = async (
       return res.status(404).json({ message: "Project Not Found" });
     }
 
-    const project = projectResult.rows[0];
+    const projectRow = projectResult.rows[0];
 
     const memberResult = await pool.query(
       `SELECT * FROM project_members WHERE project_id = $1 AND user_id = $2`,
-      [project.id, user.id]
+      [projectRow.id, userRow.id]
     );
 
     if (memberResult.rows.length === 0) {
       return res.status(401).json({ message: "User is not part of Project" });
     }
 
-    const currentTime = new Date();
-    await pool.query(
-      `UPDATE project_members SET joined_at = $1 WHERE user_id = $2 AND project_id = $3`,
-      [currentTime, user.id, project.id]
+    const membersResult = await pool.query(
+      `SELECT u.id, u.name, u.email, pm.role
+       FROM project_members pm
+       JOIN users u ON pm.user_id = u.id
+       WHERE pm.project_id = $1`,
+      [projectRow.id]
     );
 
-    return res
-      .status(200)
-      .json({ message: "You joined successfully!", projectId: project.id });
-  } catch (error: any) {
-    console.error("Error authorizing:", error);
+    const filesResult = await pool.query(
+      `SELECT rules_md, openapi_file, schema
+       FROM project_details
+       WHERE project_id = $1
+       ORDER BY created_at DESC
+       LIMIT 1`,
+      [projectRow.id]
+    );
+
+    const user: User = {
+      id: userRow.id.toString(),
+      name: userRow.name,
+      email: userRow.email,
+      username: userRow.username,
+      created_at: userRow.created_at.toISOString(),
+    };
+
+    const members: Member[] = membersResult.rows.map((member) => ({
+      id: member.id.toString(),
+      name: member.name,
+      email: member.email,
+      role: member.role || "member",
+    }));
+
+    const project: Project = {
+      id: projectRow.id.toString(),
+      name: projectRow.name,
+      version: projectRow.version,
+      owner: projectRow.owner_name,
+      project_status: projectRow.project_status,
+      members: members,
+      created_at: projectRow.created_at.toISOString(),
+    };
+
+    const files: ProjectFiles = {
+      openapi_yaml: filesResult.rows[0]?.openapi_file || null,
+      schema_json: filesResult.rows[0]?.schema || null,
+      rules_md: filesResult.rows[0]?.rules_md || null,
+    };
+
+    return res.status(200).json({
+      message: "Authentication successful!",
+      user,
+      project,
+      files,
+    });
+  } catch (error) {
+    console.error("Error authenticating:", error);
     return res.status(500).json({ message: "Internal Server Error" });
   }
 };
