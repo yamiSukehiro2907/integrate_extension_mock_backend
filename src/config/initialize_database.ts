@@ -42,7 +42,7 @@ export const createTables = async () => {
         project_id INTEGER REFERENCES projects(id) ON DELETE CASCADE,
         user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
         role VARCHAR(100),
-        joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        joined_at TIMESTAMP DEFAULT NULL
       );
     `);
 
